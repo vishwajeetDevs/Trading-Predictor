@@ -65,9 +65,10 @@ def decide(
         if plan.get("direction") == position.side.lower() and plan.get("invalidation") is not None:
             invalidated = close < plan["invalidation"] if side > 0 else close > plan["invalidation"]
         target_hit = False
-        for target in plan.get("targets") or []:
-            if (side > 0 and close >= target["price"]) or (side < 0 and close <= target["price"]):
-                target_hit = True
+        if plan.get("direction") == position.side.lower():
+            for target in plan.get("targets") or []:
+                if (side > 0 and close >= target["price"]) or (side < 0 and close <= target["price"]):
+                    target_hit = True
         if against_shift or swept_protection or p_side < EXIT_P or invalidated or target_hit:
             if against_shift:
                 reasons.append("A %s against the position printed %d bars ago." % (latest_shift["kind"], latest_shift["bars_ago"]))
