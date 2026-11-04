@@ -13,6 +13,7 @@ from app.schemas.api import (
     decimal_text,
 )
 from app.services.health_service import build_diagnostics, build_health, build_status, probe_public_rest
+from app.services.live_service import live_view
 
 router = APIRouter()
 
@@ -31,6 +32,10 @@ def index():
             "/diagnostics/delta",
             "/analysis/snapshot",
             "/analysis/history",
+            "/analysis/verdict",
+            "/analysis/decision",
+            "/analysis/verdict/history",
+            "/market/live",
             "/derivatives/snapshot",
             "/derivatives/funding",
             "/derivatives/open-interest",
@@ -50,6 +55,14 @@ def _parse_time(value: str | None):
 
     moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return as_utc(moment)
+
+
+@router.get("/market/live")
+def market_live(timeframe: str = Query("1m"), session: Session = Depends(get_db), runtime=Depends(get_runtime)):
+    """Forming bar and last traded price from the public socket. Not a closed candle."""
+    if timeframe not in RESOLUTIONS:
+        raise HTTPException(status_code=422, detail="timeframe must be one of %s" % ", ".join(RESOLUTIONS))
+    return live_view(session, runtime, timeframe)
 
 
 @router.get("/health", response_model=HealthResponse)

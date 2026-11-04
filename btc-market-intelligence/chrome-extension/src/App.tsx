@@ -1,11 +1,15 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { defaultSettings, loadBundle, loadSettings, requestVerdict, saveSettings, verdictRequestFrom, type OpenPosition, type Settings } from "./api";
-import { CandleChart, candleRows, historyPoints, LineChart } from "./charts";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { defaultSettings, loadBundle, loadLive, loadSettings, requestVerdict, saveSettings, verdictRequestFrom, type OpenPosition, type Settings } from "./api";
+import { CandleChart, candleRows, formingRow, historyPoints, LineChart } from "./charts";
+import { DecisionCard } from "./Decision";
 import { HORIZONS, INDICATOR_HELP, TIMEFRAMES, percent, text, tone } from "./format";
-import { VerdictControls, VerdictView } from "./Verdict";
+import { Nested, VerdictControls, VerdictView, obj } from "./Verdict";
 
 type Bundle = Awaited<ReturnType<typeof loadBundle>>;
 type VerdictState = { body: Record<string, unknown> | null; error: string | null; busy: boolean; at: string | null };
+type Live = Record<string, unknown> | null;
+
+export const LIVE_POLL_SECONDS = 5;
 
 export function App() {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
@@ -17,6 +21,8 @@ export function App() {
   const [ready, setReady] = useState(false);
   const [tick, setTick] = useState(0);
   const [verdict, setVerdict] = useState<VerdictState>({ body: null, error: null, busy: false, at: null });
+  const [live, setLive] = useState<Live>(null);
+  const [liveError, setLiveError] = useState<string | null>(null);
 
   const analyze = async (force = false) => {
     setVerdict((state) => ({ ...state, busy: true, error: null }));
@@ -27,6 +33,45 @@ export function App() {
       setVerdict((state) => ({ ...state, busy: false, error: reason instanceof Error ? reason.message : "Analysis failed." }));
     }
   };
+
+  // The decision follows the tape: re-run on every refresh tick once the first analysis has been requested.
+  const watchDecision = verdict.body !== null;
+  useEffect(() => {
+    if (!ready || !watchDecision) return;
+    let stop = false;
+    const timer = window.setInterval(() => {
+      if (stop) return;
+      void analyze(false);
+    }, Math.max(10, settings.refreshSeconds) * 1000);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, watchDecision, settings.baseUrl, settings.refreshSeconds, settings.verdictTimeframe, settings.verdictHorizon, settings.accountSize, settings.riskPercent, settings.position]);
+
+  // Live tape: forming bar and last price, polled lightly. No database history is re-requested here.
+  useEffect(() => {
+    if (!ready) return;
+    let stop = false;
+    const pull = async () => {
+      try {
+        const next = await loadLive(settings.baseUrl, settings.timeframe);
+        if (!stop) {
+          setLive(next);
+          setLiveError(null);
+        }
+      } catch (reason) {
+        if (!stop) setLiveError(reason instanceof Error ? reason.message : "Live feed unavailable.");
+      }
+    };
+    void pull();
+    const timer = window.setInterval(pull, LIVE_POLL_SECONDS * 1000);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, [ready, settings.baseUrl, settings.timeframe, tick]);
 
   useEffect(() => {
     loadSettings().then((stored) => {
@@ -85,11 +130,11 @@ export function App() {
       {error ? <div className="error">{error} The last successful view stays on screen when one exists. <button type="button" onClick={() => setTick((value) => value + 1)}>Retry</button></div> : null}
       {loading && !bundle ? <div className="skeleton" /> : null}
       {ready ? (
-        <Section title="Analysis verdict" id="verdict" settings={settings} update={update}>
+        <Section title="Trade decision" id="verdict" settings={settings} update={update}>
           <VerdictPanel settings={settings} update={update} state={verdict} onAnalyze={analyze} />
         </Section>
       ) : null}
-      {bundle ? <Dashboard bundle={bundle} settings={settings} horizon={horizon} setHorizon={setHorizon} update={update} /> : null}
+      {bundle ? <Dashboard bundle={bundle} live={live} liveError={liveError} settings={settings} horizon={horizon} setHorizon={setHorizon} update={update} /> : null}
     </main>
   );
 }
@@ -100,9 +145,10 @@ function VerdictPanel({ settings, update, state, onAnalyze }: {
   state: VerdictState;
   onAnalyze: (force?: boolean) => void;
 }) {
+  const decision = state.body ? obj(state.body.decision) : null;
   return (
     <>
-      <p className="muted">Layered analysis: regime → liquidity → structure → SMC/ICT → levels → momentum → derivatives → fusion → risk → verdict. Probabilities, not guarantees.</p>
+      <p className="muted">Deterministic rules on closed candles: regime → liquidity → structure → SMC/ICT → levels → momentum → derivatives → fusion → risk → decision. No AI model. Probabilities, not guarantees.</p>
       <VerdictControls
         timeframe={settings.verdictTimeframe}
         horizon={settings.verdictHorizon}
@@ -115,18 +161,25 @@ function VerdictPanel({ settings, update, state, onAnalyze }: {
       {state.busy && !state.body ? <div className="skeleton" /> : null}
       {state.body ? (
         <>
-          <p className="muted">Analyzed {state.at ?? ""} {settings.position ? `· open ${settings.position.side} from ${settings.position.entryPrice}` : "· no open position"} {settings.accountSize ? `· account ${settings.accountSize}` : ""}
-            {" "}<button type="button" className="link" onClick={() => onAnalyze(true)} disabled={state.busy}>Recompute</button>
+          <p className="muted">Analyzed {state.at ?? ""} {settings.position ? `· open ${settings.position.side} from ${settings.position.entryPrice}` : "· no open position"} {settings.accountSize ? `· account ${settings.accountSize}` : ""} · auto-refresh every {Math.max(10, settings.refreshSeconds)}s
+            {" "}<button type="button" className="link" onClick={() => onAnalyze(true)} disabled={state.busy}>Recompute now</button>
           </p>
-          <VerdictView body={state.body} />
+          {decision && Object.keys(decision).length ? (
+            <DecisionCard decision={decision} computedAt={text(state.body.computed_at, "") || null} watermark={text(state.body.candle_watermark, "") || null} cached={state.body.cached === true} refreshing={state.body.refreshing === true} />
+          ) : <p className="warn">The backend did not return a decision block. Update the backend to the current version.</p>}
+          <Nested title="Full layered analysis">
+            <VerdictView body={state.body} />
+          </Nested>
         </>
-      ) : !state.busy && !state.error ? <p className="muted">Press Analyze to run the layered engine on the latest closed candles.</p> : null}
+      ) : !state.busy && !state.error ? <p className="muted">Press Analyze to run the rule engine on the latest closed candles. It then re-runs automatically on each refresh and whenever a new candle closes.</p> : null}
     </>
   );
 }
 
-function Dashboard({ bundle, settings, horizon, setHorizon, update }: {
+function Dashboard({ bundle, live, liveError, settings, horizon, setHorizon, update }: {
   bundle: Bundle;
+  live: Live;
+  liveError: string | null;
   settings: Settings;
   horizon: string;
   setHorizon: (value: string) => void;
@@ -140,7 +193,10 @@ function Dashboard({ bundle, settings, horizon, setHorizon, update }: {
     <>
       {stale ? <div className="banner">Some data is stale or the study watermark is behind the latest closed candle. Stale values are not live prices.</div> : null}
       <Section title="Market overview" id="overview" settings={settings} update={update}>
-        <Overview snapshot={snapshot} health={health} />
+        <Overview snapshot={snapshot} health={health} live={live} />
+      </Section>
+      <Section title="Live chart" id="charts" settings={settings} update={update}>
+        <Charts bundle={bundle} live={live} liveError={liveError} timeframe={settings.timeframe} onTimeframe={(timeframe) => update({ timeframe })} />
       </Section>
       <Section title="Market structure" id="structure" settings={settings} update={update}>
         <Structure snapshot={snapshot} />
@@ -160,8 +216,8 @@ function Dashboard({ bundle, settings, horizon, setHorizon, update }: {
       <Section title="Derivatives" id="derivatives" settings={settings} update={update}>
         <Derivatives body={derivatives} />
       </Section>
-      <Section title="Charts" id="charts" settings={settings} update={update}>
-        <Charts bundle={bundle} timeframe={settings.timeframe} onTimeframe={(timeframe) => update({ timeframe })} />
+      <Section title="Derivatives history" id="derivatives-charts" settings={settings} update={update}>
+        <DerivativesCharts bundle={bundle} />
       </Section>
       <Section title="Data health" id="health" settings={settings} update={update}>
         <Health health={health} diagnostics={bundle.diagnostics} snapshot={snapshot} derivatives={derivatives} />
@@ -199,12 +255,18 @@ function Section({ title, id, settings, update, children }: { title: string; id:
   );
 }
 
-function Overview({ snapshot, health }: { snapshot: Record<string, unknown>; health: Record<string, unknown> }) {
+function Overview({ snapshot, health, live }: { snapshot: Record<string, unknown>; health: Record<string, unknown>; live: Live }) {
   const product = objectOf(snapshot.product);
   const close = health.latest_closed_candle_at;
+  const liveStale = !live || live.stale !== false;
   return (
     <div className="grid">
       <Field label="Symbol" value={text(product.symbol)} />
+      <Field
+        label={liveStale ? "Last price (not live)" : "Last price (live)"}
+        value={text(live?.last_price, "Unavailable")}
+        help={liveStale ? "The socket has not delivered a fresh minute. This is the newest price the backend has seen, not a live quote." : "Close of the forming minute from the public socket."}
+      />
       <Field label="Latest completed close" value={text(close, "No closed candle")} help="This is the last completed candle time, not a live executable price." />
       <Field label="Freshness seconds" value={text(health.freshness_seconds)} />
       <Field label="Health" value={text(health.status)} />
@@ -336,26 +398,61 @@ export function Derivatives({ body }: { body: Record<string, unknown> }) {
   );
 }
 
-function Charts({ bundle, timeframe, onTimeframe }: { bundle: Bundle; timeframe: string; onTimeframe: (value: string) => void }) {
-  const rows = candleRows(bundle.candles);
+export function Charts({ bundle, live, liveError, timeframe, onTimeframe }: { bundle: Bundle; live: Live; liveError: string | null; timeframe: string; onTimeframe: (value: string) => void }) {
+  const rows = useMemo(() => candleRows(bundle.candles), [bundle.candles]);
+  const forming = useMemo(() => formingRow(live, rows), [live, rows]);
+  const liveFresh = Boolean(live) && live?.stale === false;
+  const lastPrice = Number(live?.last_price);
+  const last = forming ?? rows[rows.length - 1];
+  const previous = forming ? rows[rows.length - 1] : rows[rows.length - 2];
+  const change = last && previous ? ((last.close - previous.close) / previous.close) * 100 : null;
+  const priceLine = Number.isFinite(lastPrice) ? lastPrice : null;
+  return (
+    <>
+      <div className="chart-toolbar">
+        <label>Timeframe
+          <select value={timeframe} onChange={(event) => onTimeframe(event.target.value)}>
+            {TIMEFRAMES.map((item) => <option key={item}>{item}</option>)}
+          </select>
+        </label>
+        <span className={`live-pill ${liveFresh ? "is-live" : "is-stale"}`}>{liveFresh ? "LIVE" : liveError ? "LIVE FEED DOWN" : "NOT LIVE"}</span>
+      </div>
+      {last ? (
+        <div className="ohlc">
+          <span>O <b>{fmtPrice(last.open)}</b></span>
+          <span>H <b className="up">{fmtPrice(last.high)}</b></span>
+          <span>L <b className="down">{fmtPrice(last.low)}</b></span>
+          <span>C <b className={last.close >= last.open ? "up" : "down"}>{fmtPrice(last.close)}</b></span>
+          {change !== null ? <span className={change >= 0 ? "up" : "down"}>{change >= 0 ? "+" : ""}{change.toFixed(2)}%</span> : null}
+          <span className="muted">{forming ? "forming bar" : "last closed bar"} · {new Date(last.time * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC</span>
+        </div>
+      ) : null}
+      {rows.length === 0 ? <p>No candle rows returned.</p> : <CandleChart rows={rows} forming={forming} lastPrice={priceLine} liveLabel={liveFresh ? "live" : "last seen"} />}
+      <p className="muted">
+        Green closes above its open, red closes below. Solid candles are completed. The hollow candle is the forming {timeframe} bar built from stored closed minutes plus the socket's forming minute; it changes until the bucket closes.
+        {live && live.stale !== false ? " The live feed is stale, so the forming bar and last price are the newest values the backend has seen." : ""}
+        {liveError ? ` ${liveError}` : ""}
+      </p>
+    </>
+  );
+}
+
+function fmtPrice(value: number): string {
+  return value.toLocaleString(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 1 });
+}
+
+function DerivativesCharts({ bundle }: { bundle: Bundle }) {
   const funding = historyPoints(objectOf(objectOf(bundle.derivatives.funding).values).history, "funding_rate");
   const interest = historyPoints(objectOf(objectOf(bundle.derivatives.open_interest).values).history, "contracts");
   const marks = historyPoints(objectOf(objectOf(bundle.derivatives.mark_price).values).history, "mark_price");
   return (
     <>
-      <label>Candle timeframe
-        <select value={timeframe} onChange={(event) => onTimeframe(event.target.value)}>
-          {TIMEFRAMES.map((item) => <option key={item}>{item}</option>)}
-        </select>
-      </label>
-      <p className="muted">Completed candles from the backend. The forming minute is not drawn as a closed bar.</p>
-      {rows.length === 0 ? <p>No candle rows returned.</p> : <CandleChart rows={rows} />}
       <h2>Funding history</h2>
-      {funding.length === 0 ? <p>No stored funding history.</p> : <LineChart points={funding} />}
+      {funding.length === 0 ? <p>No stored funding history.</p> : <LineChart points={funding} color="#f59e0b" />}
       <h2>Open interest history</h2>
-      {interest.length === 0 ? <p>No stored open-interest history.</p> : <LineChart points={interest} />}
+      {interest.length === 0 ? <p>No stored open-interest history.</p> : <LineChart points={interest} color="#60a5fa" />}
       <h2>Mark price history</h2>
-      {marks.length === 0 ? <p>No stored mark-price history.</p> : <LineChart points={marks} />}
+      {marks.length === 0 ? <p>No stored mark-price history.</p> : <LineChart points={marks} color="#a78bfa" />}
     </>
   );
 }

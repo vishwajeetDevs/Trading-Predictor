@@ -121,7 +121,7 @@ function migrationState(snapshot: Snapshot): Check {
     return unverified("migrations", "Database migrations", "The diagnostics payload did not include a revision.");
   }
   if (
-    (snapshot.revision === "0001_initial" || snapshot.revision === "0002_analysis" || snapshot.revision === "0003_sampling" || snapshot.revision === "0004_derivatives") &&
+    (snapshot.revision === "0001_initial" || snapshot.revision === "0002_analysis" || snapshot.revision === "0003_sampling" || snapshot.revision === "0004_derivatives" || snapshot.revision === "0005_verdict_runs") &&
     snapshot.tablesOk
   ) {
     return pass(

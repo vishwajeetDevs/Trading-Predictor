@@ -7,6 +7,7 @@ import time
 from datetime import datetime
 from typing import Callable
 
+from app.analysis.engine import decision as decision_rules
 from app.analysis.engine import derivatives_evidence, fusion, liquidity, momentum, patterns, regime, risk, sessions, smc, verdict, zones
 from app.analysis.engine.types import (
     ENGINE_VERSION,
@@ -193,7 +194,7 @@ def analyze(data: MarketData, request: AnalyzeRequest) -> dict:
     )
 
     market_read = _market_read(bias, dominant_regime, fused, sequence)
-    return {
+    result = {
         "engine_version": ENGINE_VERSION,
         "focus_timeframe": focus,
         "horizon": horizon,
@@ -215,9 +216,11 @@ def analyze(data: MarketData, request: AnalyzeRequest) -> dict:
         "layers": [layer.public() for layer in layers],
         "layer_summaries": [{"name": layer.name, "status": layer.status, "summary": layer.summary} for layer in layers],
         "data_freshness": {"stale": stale, "freshness_multiplier": round(freshness, 4), "health": data.health},
-        "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 2),
         "disclaimer": decision["disclaimer"],
     }
+    result["decision"] = decision_rules.build_decision(result, momentum_focus, (focus_regime_view or {}).get("atr_percent_percentile"))
+    result["elapsed_ms"] = round((time.perf_counter() - started) * 1000.0, 2)
+    return result
 
 
 def _market_read(bias: str, regime_name: str, fused: dict, sequence: dict) -> dict:

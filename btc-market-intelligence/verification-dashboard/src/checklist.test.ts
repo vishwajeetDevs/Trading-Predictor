@@ -61,6 +61,7 @@ describe("verification checklist", () => {
     expect(buildChecklist({ ...empty, revision: "0002_analysis" }).find((item) => item.id === "migrations")?.state).toBe("PASS");
     expect(buildChecklist({ ...empty, revision: "0003_sampling" }).find((item) => item.id === "migrations")?.state).toBe("PASS");
     expect(buildChecklist({ ...empty, revision: "0004_derivatives" }).find((item) => item.id === "migrations")?.state).toBe("PASS");
+    expect(buildChecklist({ ...empty, revision: "0005_verdict_runs" }).find((item) => item.id === "migrations")?.state).toBe("PASS");
     expect(priceCaption({ is_closed: true })).toBe("Latest completed close");
     expect(priceCaption({ is_closed: false })).not.toMatch(/live price/i);
   });

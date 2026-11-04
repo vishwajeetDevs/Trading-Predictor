@@ -114,6 +114,7 @@ class VerdictResponse(BaseModel):
     risks: list[str]
     what_changes_this_view: list[str]
     trade_plan: dict
+    decision: dict
     layers: list[dict]
     layer_summaries: list[dict]
     data_freshness: dict

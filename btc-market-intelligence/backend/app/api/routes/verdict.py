@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_runtime, get_settings
 from app.schemas.api import VerdictRequest, VerdictResponse
-from app.services.verdict_service import compute_verdict, list_runs, to_request
+from app.services.verdict_service import compute_verdict, decision_view, list_runs, to_request
 
 router = APIRouter()
 
@@ -40,6 +40,25 @@ def analysis_verdict_get(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _run(body, session, settings, runtime)
+
+
+@router.get("/analysis/decision")
+def analysis_decision(
+    focus_timeframe: str = Query(default="15m"),
+    horizon: str = Query(default="4h"),
+    account_size: float | None = Query(default=None, gt=0),
+    risk_percent: float = Query(default=1.0, gt=0, le=10),
+    force_refresh: bool = Query(default=False),
+    session: Session = Depends(get_db),
+    settings=Depends(get_settings),
+    runtime=Depends(get_runtime),
+):
+    """Rule-based TAKE_TRADE / WAIT view. Same engine as /analysis/verdict, compact envelope."""
+    try:
+        body = VerdictRequest(focus_timeframe=focus_timeframe, horizon=horizon, account_size=account_size, risk_percent=risk_percent, force_refresh=force_refresh)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return decision_view(_run(body, session, settings, runtime))
 
 
 @router.get("/analysis/verdict/history")

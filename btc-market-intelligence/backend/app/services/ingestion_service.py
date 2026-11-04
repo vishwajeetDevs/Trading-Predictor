@@ -44,9 +44,31 @@ class RuntimeStatus:
     last_recovery_at: datetime | None = None
     last_recovery_status: str | None = None
     last_recovery_error: str | None = None
+    # Live tape from the public socket. Not persisted; exposed by GET /market/live.
+    forming_candle: dict | None = None
+    forming_candle_at: datetime | None = None
+    mark_price: str | None = None
+    mark_price_at: datetime | None = None
 
 
 runtime_status = RuntimeStatus()
+
+
+def _forming_view(draft) -> dict | None:
+    if draft is None or draft.is_closed:
+        return None
+    return {
+        "symbol": draft.symbol,
+        "timeframe": draft.timeframe,
+        "open_time": as_utc(draft.open_time).isoformat(),
+        "open": str(draft.open),
+        "high": str(draft.high),
+        "low": str(draft.low),
+        "close": str(draft.close),
+        "volume": str(draft.volume),
+        "is_closed": False,
+        "source": "delta_ws_forming",
+    }
 
 
 async def run_public_socket(settings: Settings, session_factory, stop: asyncio.Event, status: RuntimeStatus | None = None) -> None:
@@ -133,9 +155,15 @@ async def _read_socket(settings, session_factory, socket, stop, status, symbol, 
         elif event.kind == "malformed":
             await asyncio.to_thread(_quality, session_factory, "malformed", event.detail)
         elif event.kind == "candle":
+            status.forming_candle = _forming_view(parser.book.current)
+            status.forming_candle_at = received
             await asyncio.to_thread(
                 _store_candles, settings, session_factory, symbol, event.candles, event.sequence, status
             )
+        elif event.kind == "mark_price":
+            if event.detail.get("symbol") in (symbol, "MARK:%s" % symbol):
+                status.mark_price = event.detail.get("price")
+                status.mark_price_at = received
         elif event.kind == "funding_rate":
             await asyncio.to_thread(_store_funding, session_factory, event.detail)
         elif event.kind == "ob_updates":
@@ -145,6 +173,7 @@ async def _read_socket(settings, session_factory, socket, stop, status, symbol, 
                 await asyncio.to_thread(_derivatives_quality, session_factory, outcome, {"sequence": book.sequence})
         due = parser.close_due(utcnow())
         if due is not None:
+            status.forming_candle = None
             await asyncio.to_thread(_store_candles, settings, session_factory, symbol, [due], "closed", status)
 
 

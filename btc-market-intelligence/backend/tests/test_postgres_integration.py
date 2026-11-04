@@ -101,12 +101,12 @@ def test_public_database_is_reachable_and_constrained(public_candle_count):
         with _connect(engine) as connection:
             assert connection.execute(text("select 1")).scalar() == 1
             version = connection.execute(text("select version_num from public.alembic_version")).scalar()
-            assert version in {"0001_initial", "0002_analysis", "0003_sampling", "0004_derivatives"}
+            assert version in {"0001_initial", "0002_analysis", "0003_sampling", "0004_derivatives", "0005_verdict_runs"}
             tables = {row[0] for row in connection.execute(text(
                 "select table_name from information_schema.tables where table_schema = 'public'"
             ))}
             assert {"products", "candles", "ingestion_state", "websocket_events", "data_quality_events"} <= tables
-            if version in {"0002_analysis", "0003_sampling", "0004_derivatives"}:
+            if version in {"0002_analysis", "0003_sampling", "0004_derivatives", "0005_verdict_runs"}:
                 assert {"study_runs", "condition_matches", "horizon_stats", "analysis_snapshots"} <= tables
             slot = connection.execute(text(
                 "select 1 from pg_constraint where conname = 'uq_candle_slot' and connamespace = 'public'::regnamespace"

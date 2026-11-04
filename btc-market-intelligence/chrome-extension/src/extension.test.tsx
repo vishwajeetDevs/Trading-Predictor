@@ -2,8 +2,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { defaultSettings, getJson, normalizeBase, postJson, verdictRequestFrom } from "./api";
+import { CHART_CANDLES, defaultSettings, getJson, loadBundle, normalizeBase, postJson, verdictRequestFrom } from "./api";
 import { Derivatives } from "./App";
+import { candleRows, formingRow } from "./charts";
+import { DecisionCard, decisionTone } from "./Decision";
 import { VerdictView } from "./Verdict";
 
 describe("backend url", () => {
@@ -89,6 +91,80 @@ describe("verdict", () => {
     expect(screen.getByText(/data is stale/i)).toBeTruthy();
     expect(screen.getByText("Probabilities, not guarantees.")).toBeTruthy();
     expect(screen.getByText(/playbook is at SWEEP/)).toBeTruthy();
+  });
+});
+
+describe("live chart data", () => {
+  it("requests the newest candles and draws them oldest first", async () => {
+    const urls: string[] = [];
+    const fetcher = async (url: string) => {
+      urls.push(url);
+      const body = url.includes("/candles")
+        ? { candles: [
+            { timestamp: "2026-11-04T18:30:00+00:00", open: "3", high: "4", low: "2", close: "3.5", volume: "1", is_closed: true },
+            { timestamp: "2026-11-04T18:15:00+00:00", open: "1", high: "2", low: "0.5", close: "1.5", volume: "1", is_closed: true },
+            { timestamp: "2026-11-04T18:45:00+00:00", open: "5", high: "6", low: "4", close: "5.5", volume: "1", is_closed: false },
+          ] }
+        : {};
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    const bundle = await loadBundle("http://127.0.0.1:8000", "15m", fetcher as typeof fetch);
+    const candleUrl = urls.find((url) => url.includes("/candles")) ?? "";
+    expect(candleUrl).toContain("order=desc");
+    expect(candleUrl).toContain(`limit=${CHART_CANDLES}`);
+    const rows = candleRows(bundle.candles);
+    expect(rows.map((row) => row.close)).toEqual([1.5, 3.5]);
+    expect(rows.every((row) => row.closed)).toBe(true);
+  });
+
+  it("only appends a forming bar that is newer than the last closed bar", () => {
+    const closed = candleRows({ candles: [{ timestamp: "2026-11-04T18:30:00+00:00", open: "3", high: "4", low: "2", close: "3.5", volume: "1", is_closed: true }] });
+    const older = formingRow({ forming_candle: { open_time: "2026-11-04T18:30:00+00:00", open: "3", high: "4", low: "2", close: "3.5", volume: "1", is_closed: false } }, closed);
+    expect(older).toBeNull();
+    const newer = formingRow({ forming_candle: { open_time: "2026-11-04T18:45:00+00:00", open: "3.5", high: "4.2", low: "3.4", close: "4.1", volume: "0.3", is_closed: false } }, closed);
+    expect(newer?.closed).toBe(false);
+    expect(newer?.close).toBe(4.1);
+    expect(formingRow(null, closed)).toBeNull();
+  });
+});
+
+describe("trade decision", () => {
+  it("shows TAKE TRADE with levels for a bullish decision", () => {
+    render(<DecisionCard cached={false} computedAt="2026-11-04T18:30:00Z" watermark="2026-11-04T18:29:00Z" decision={{
+      action: "TAKE_TRADE", direction: "BULLISH", side: "BUY", headline: "BULLISH (BUY)",
+      entry: 80100.5, entry_note: "Midpoint of the bullish fvg.", stop_loss: 79600, stop_loss_note: "Structural.",
+      take_profit: [{ price: 81200, r_multiple: 2.2, synthetic: false }], risk_reward: 2.2, expected_value_r: 0.9,
+      confidence: 0.63, confidence_label: "MEDIUM",
+      explanation: ["All 9 entry rules passed on the 15m closed bars."],
+      checklist: [{ rule: "Confidence", passed: true, value: 0.63, threshold: ">= 0.50", detail: "" }],
+      indicators: { agree: 6, disagree: 0, neutral: 1, votes: [{ indicator: "RSI(14)", value: 58.2, reading: "above 50", state: "agree" }], note: "votes" },
+      risk_rules: ["No trade unless every rule passes."], note: "No AI.", disclaimer: "Not advice.",
+    }} />);
+    expect(screen.getByText("TAKE TRADE")).toBeTruthy();
+    expect(screen.getByText("BULLISH (BUY)")).toBeTruthy();
+    expect(screen.getByText("Entry")).toBeTruthy();
+    expect(screen.getByText("Stop loss")).toBeTruthy();
+    expect(screen.getByText(/2\.20 : 1/)).toBeTruthy();
+    expect(screen.getByText(/All 9 entry rules passed/)).toBeTruthy();
+    expect(decisionTone("TAKE_TRADE", "BULLISH")).toBe("bull");
+    expect(decisionTone("TAKE_TRADE", "BEARISH")).toBe("bear");
+  });
+
+  it("hides levels on WAIT and explains why", () => {
+    render(<DecisionCard cached={true} computedAt={null} watermark={null} decision={{
+      action: "WAIT", direction: "NONE", side: null, headline: "WAIT · lean bearish",
+      entry: null, stop_loss: null, take_profit: [], risk_reward: null,
+      confidence: 0.41, confidence_label: "LOW",
+      explanation: ["The setup is incomplete. Rules not yet satisfied: Playbook reached the entry zone."],
+      checklist: [{ rule: "Playbook reached the entry zone", passed: false, value: "SWEEP", threshold: "IN_ENTRY_ZONE or later", detail: "" }],
+      indicators: { agree: 2, disagree: 3, neutral: 1, votes: [], note: "" },
+      risk_rules: [], note: "", disclaimer: "",
+    }} />);
+    expect(screen.getByText("WAIT")).toBeTruthy();
+    expect(screen.queryByText("Entry")).toBeNull();
+    expect(screen.getByText(/Levels appear only with a TAKE TRADE decision/)).toBeTruthy();
+    expect(screen.getByText(/Rules not yet satisfied/)).toBeTruthy();
+    expect(decisionTone("WAIT", "NONE")).toBe("wait");
   });
 });
 

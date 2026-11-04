@@ -115,15 +115,22 @@ export async function getJson(base: string, path: string, fetcher: typeof fetch 
   return body as Record<string, unknown>;
 }
 
+export const CHART_CANDLES = 240;
+
 export async function loadBundle(base: string, timeframe: string, fetcher: typeof fetch = fetch) {
   const [health, diagnostics, snapshot, candles, derivatives] = await Promise.all([
     getJson(base, "/health", fetcher),
     getJson(base, "/diagnostics", fetcher),
     getJson(base, "/analysis/snapshot", fetcher),
-    getJson(base, `/candles?timeframe=${encodeURIComponent(timeframe)}&limit=240`, fetcher),
+    // Newest closed candles first, so the chart ends at the current market, then sorted ascending for drawing.
+    getJson(base, `/candles?timeframe=${encodeURIComponent(timeframe)}&limit=${CHART_CANDLES}&order=desc`, fetcher),
     getJson(base, "/derivatives/snapshot", fetcher),
   ]);
   return { health, diagnostics, snapshot, candles, derivatives };
+}
+
+export function loadLive(base: string, timeframe: string, fetcher: typeof fetch = fetch) {
+  return getJson(base, `/market/live?timeframe=${encodeURIComponent(timeframe)}`, fetcher);
 }
 
 export async function loadSettings(): Promise<Settings> {

@@ -93,6 +93,67 @@ def test_get_verdict_is_cached_and_persisted(session_factory, session):
     assert history.status_code == 200 and len(history.json()) == 2
 
 
+def test_concurrent_pollers_share_one_computation(session_factory, session, monkeypatch):
+    """While one request recomputes, others reuse the latest result instead of stacking loads."""
+    import threading
+    import time
+
+    _seed(session)
+    calls = {"analyze": 0}
+    real_analyze = verdict_service.pipeline.analyze
+
+    def slow_analyze(data, request):
+        calls["analyze"] += 1
+        time.sleep(0.4)
+        return real_analyze(data, request)
+
+    monkeypatch.setattr(verdict_service.pipeline, "analyze", slow_analyze)
+    with _client(session_factory) as client:
+        first = client.get("/analysis/decision?focus_timeframe=15m&horizon=4h")
+        assert first.status_code == 200 and first.json()["cached"] is False
+        forced = threading.Thread(target=client.get, args=("/analysis/decision?focus_timeframe=15m&horizon=4h&force_refresh=true",))
+        forced.start()
+        time.sleep(0.1)
+        follower = client.get("/analysis/decision?focus_timeframe=15m&horizon=4h")
+        forced.join()
+    assert follower.status_code == 200
+    assert follower.json()["cached"] is True
+    assert calls["analyze"] == 2
+
+
+def test_new_candle_serves_previous_result_and_refreshes_in_background(session_factory, session):
+    import time
+
+    product = _seed(session)
+    url = "/analysis/decision?focus_timeframe=15m&horizon=4h"
+    with _client(session_factory) as client:
+        first = client.get(url).json()
+        assert first["cached"] is False and first["refreshing"] is False
+        old_watermark = first["candle_watermark"]
+        # A new 1m candle closes -> the cached key is invalidated.
+        repo = MarketRepository(session)
+        repo.upsert_candles(product.id, [_draft(START + 80 * 60, 101, 103, 99, "1m")])
+        session.commit()
+        started = time.monotonic()
+        second = client.get(url).json()
+        assert second["cached"] is True and second["refreshing"] is True
+        assert second["candle_watermark"] == old_watermark
+        # The worker finishes shortly after; the next poll sees the new candle.
+        deadline = time.monotonic() + 10
+        third = None
+        while time.monotonic() < deadline:
+            third = client.get(url).json()
+            if third["candle_watermark"] != old_watermark:
+                break
+            time.sleep(0.1)
+        assert third is not None and third["candle_watermark"] != old_watermark
+        assert third["cached"] is True and third["refreshing"] is False
+        assert third["timings_ms"] and set(third["timings_ms"]) == {"load", "engine", "persist"}
+        assert time.monotonic() - started < 10
+    rows = session.scalars(select(VerdictRun).where(VerdictRun.product_id == product.id)).all()
+    assert len(rows) == 2
+
+
 def test_open_position_yields_hold_or_exit(session_factory, session):
     _seed(session)
     with _client(session_factory) as client:
