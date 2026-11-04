@@ -14,6 +14,8 @@ export default defineConfig({
       "/candles": api,
       "/data": api,
       "/diagnostics": api,
+      "/analysis": api,
+      "/derivatives": api,
     },
   },
   test: {

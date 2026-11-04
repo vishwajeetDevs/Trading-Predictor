@@ -11,6 +11,7 @@ from sqlalchemy.exc import OperationalError
 from app.api.routes.analysis import router as analysis_router
 from app.api.routes.derivatives import router as derivatives_router
 from app.api.routes.market import router
+from app.api.routes.verdict import router as verdict_router
 from app.config.settings import Settings, get_settings
 from app.core.logging import configure_logging
 from app.database.session import describe_db_error, session_factory_from_settings
@@ -87,12 +88,13 @@ def create_app(settings: Settings | None = None, session_factory=None, engine=No
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
-        allow_methods=["GET"],
-        allow_headers=["Accept"],
+        allow_methods=["GET", "POST"],
+        allow_headers=["Accept", "Content-Type"],
     )
     app.include_router(router)
     app.include_router(analysis_router)
     app.include_router(derivatives_router)
+    app.include_router(verdict_router)
     return app
 
 

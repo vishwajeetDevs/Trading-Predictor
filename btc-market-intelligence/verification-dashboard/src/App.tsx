@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { callApi } from "./api";
 import { CandleChart } from "./Chart";
@@ -27,6 +27,22 @@ export function App() {
   const [manual, setManual] = useState<Record<string, ApiResult>>({});
   const [offline, setOffline] = useState(false);
   const [healthChecked, setHealthChecked] = useState(false);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [verdict, setVerdict] = useState<ApiResult | null>(null);
+  const [verdictBusy, setVerdictBusy] = useState(false);
+  const [verdictTimeframe, setVerdictTimeframe] = useState("15m");
+  const [verdictHorizon, setVerdictHorizon] = useState("4h");
+
+  const toggleSection = (id: string) => {
+    setCollapsed((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const runVerdict = useCallback(async (force = false) => {
+    setVerdictBusy(true);
+    const result = await callApi(`/analysis/verdict?focus_timeframe=${verdictTimeframe}&horizon=${verdictHorizon}${force ? "&force_refresh=true" : ""}`);
+    setVerdict(result);
+    setVerdictBusy(false);
+  }, [verdictTimeframe, verdictHorizon]);
 
   const loadHistory = useCallback(async (next: string) => {
     setLoadingHistory(true);
@@ -104,64 +120,93 @@ export function App() {
 
   return (
     <main>
-      <h1>BTC market verification</h1>
-      <p className="muted">Read-only view of the running API. Empty responses stay empty.</p>
-      <section className="checks">
-        {checks.map((item) => (
-          <article className="check" key={item.id}>
-            <div className="row"><strong>{item.label}</strong><span className={tone(item.state)}>{item.state}</span></div>
-            <p className="muted">{item.evidence}</p>
-          </article>
-        ))}
-      </section>
-
-      <section className="grid">
-        <article className="card">
-          <h2>System</h2>
-          <Line label="Backend" value={!healthChecked ? "checking" : offline ? "unreachable" : health?.ok ? healthBody?.status ?? "answered" : health?.error ?? "no response"} />
-          <Line label="PostgreSQL" value={flag(healthBody?.database.connected)} />
-          <Line label="Database error" value={healthBody?.database.error || "none reported"} />
-          <Line label="Delta REST" value={delta ? (bodyOf<DeltaProbe>(delta)?.ok ? "public read succeeded" : bodyOf<DeltaProbe>(delta)?.error || "public read failed") : "not checked"} />
-          <Line label="WebSocket" value={socket ? (socket.connected ? "connected" : "not connected") : "not reported"} />
-          <Line label="Last update" value={healthBody?.latest_market_event_at || "none"} />
-          <Line label="Latest completed candle" value={healthBody?.latest_closed_candle_at || "none"} />
-          <Line label="Freshness" value={healthBody ? `${healthBody.freshness_seconds ?? "unknown"} seconds` : "unknown"} />
-          <Line label="Stale" value={healthBody ? (healthBody.stale ? "yes" : "no") : "unknown"} />
-        </article>
-        <article className="card">
-          <h2>BTC product</h2>
-          {product?.status === 404 ? <p>The product endpoint returned 404. No product is stored.</p> : null}
-          {productBody ? (
-            <>
-              <Line label="Description" value={productBody.description || "not returned"} />
-              <Line label="Product ID" value={String(productBody.exchange_product_id)} />
-              <Line label="Symbol" value={productBody.symbol} />
-              <Line label="Contract" value={productBody.contract_type} />
-              <Line label="Tick size" value={productBody.tick_size || "not returned"} />
-              <Line label="Contract value" value={productBody.contract_value || "not returned"} />
-              <Line label="Unit" value={productBody.contract_unit_currency || "not returned"} />
-              <Line label="State" value={productBody.state} />
-              <Line label="Settlement" value={productBody.settlement_time || "none"} />
-            </>
-          ) : <p className="muted">{product?.error || "Product not loaded."}</p>}
-        </article>
-        <article className="card">
-          <h2>Stored BTC prices</h2>
-          <p className="muted">There is no ticker endpoint. These values are stored candle closes.</p>
-          <Line label={priceCaption(completedCandle)} value={completedCandle ? completedCandle.close : "none"} />
-          <Line label="Completed timestamp" value={completedCandle?.timestamp || "none"} />
-          <Line label={priceCaption(newestCandle)} value={newestCandle ? newestCandle.close : "none"} />
-          <Line label="Newest stored timestamp" value={newestCandle?.timestamp || "none"} />
-          {completedCandle ? <Ohlc candle={completedCandle} /> : null}
-        </article>
-      </section>
-
-      <section className="card">
-        <h2>Historical candles</h2>
+      <header className="top-header">
+        <div>
+          <h1>BTC Market Verification</h1>
+          <p className="muted">Read-only view of the running API. Empty responses stay empty.</p>
+        </div>
         <div className="toolbar">
-          {TIMEFRAMES.map((item) => (
-            <button key={item} onClick={() => setTimeframe(item)} aria-pressed={item === timeframe}>{item}</button>
+          <label className="select-label">
+            Timeframe
+            <select value={timeframe} onChange={(e) => setTimeframe(e.target.value as (typeof TIMEFRAMES)[number])}>
+              {TIMEFRAMES.map((item) => (
+                <option key={item} value={item}>{item}</option>
+              ))}
+            </select>
+          </label>
+          <button type="button" onClick={() => void refresh()}>Refresh Now</button>
+        </div>
+      </header>
+
+      <DropdownSection id="checks" title="Verification Checklist" open={!collapsed.checks} onToggle={toggleSection}>
+        <div className="checks">
+          {checks.map((item) => (
+            <article className="check" key={item.id}>
+              <div className="row"><strong>{item.label}</strong><span className={tone(item.state)}>{item.state}</span></div>
+              <p className="muted">{item.evidence}</p>
+            </article>
           ))}
+        </div>
+      </DropdownSection>
+
+      <DropdownSection id="overview" title="System, Product & Price Overview" open={!collapsed.overview} onToggle={toggleSection}>
+        <div className="grid">
+          <article className="card">
+            <h2>System</h2>
+            <Line label="Backend" value={!healthChecked ? "checking" : offline ? "unreachable" : health?.ok ? healthBody?.status ?? "answered" : health?.error ?? "no response"} />
+            <Line label="PostgreSQL" value={flag(healthBody?.database.connected)} />
+            <Line label="Database error" value={healthBody?.database.error || "none reported"} />
+            <Line label="Delta REST" value={delta ? (bodyOf<DeltaProbe>(delta)?.ok ? "public read succeeded" : bodyOf<DeltaProbe>(delta)?.error || "public read failed") : "not checked"} />
+            <Line label="WebSocket" value={socket ? (socket.connected ? "connected" : "not connected") : "not reported"} />
+            <Line label="Last update" value={healthBody?.latest_market_event_at || "none"} />
+            <Line label="Latest completed candle" value={healthBody?.latest_closed_candle_at || "none"} />
+            <Line label="Freshness" value={healthBody ? `${healthBody.freshness_seconds ?? "unknown"} seconds` : "unknown"} />
+            <Line label="Stale" value={healthBody ? (healthBody.stale ? "yes" : "no") : "unknown"} />
+          </article>
+          <article className="card">
+            <h2>BTC product</h2>
+            {product?.status === 404 ? <p>The product endpoint returned 404. No product is stored.</p> : null}
+            {productBody ? (
+              <>
+                <Line label="Description" value={productBody.description || "not returned"} />
+                <Line label="Product ID" value={String(productBody.exchange_product_id)} />
+                <Line label="Symbol" value={productBody.symbol} />
+                <Line label="Contract" value={productBody.contract_type} />
+                <Line label="Tick size" value={productBody.tick_size || "not returned"} />
+                <Line label="Contract value" value={productBody.contract_value || "not returned"} />
+                <Line label="Unit" value={productBody.contract_unit_currency || "not returned"} />
+                <Line label="State" value={productBody.state} />
+                <Line label="Settlement" value={productBody.settlement_time || "none"} />
+              </>
+            ) : <p className="muted">{product?.error || "Product not loaded."}</p>}
+          </article>
+          <article className="card">
+            <h2>Stored BTC prices</h2>
+            <p className="muted">There is no ticker endpoint. These values are stored candle closes.</p>
+            <Line label={priceCaption(completedCandle)} value={completedCandle ? completedCandle.close : "none"} />
+            <Line label="Completed timestamp" value={completedCandle?.timestamp || "none"} />
+            <Line label={priceCaption(newestCandle)} value={newestCandle ? newestCandle.close : "none"} />
+            <Line label="Newest stored timestamp" value={newestCandle?.timestamp || "none"} />
+            {completedCandle ? <Ohlc candle={completedCandle} /> : null}
+          </article>
+        </div>
+      </DropdownSection>
+
+      <DropdownSection id="candles" title="Historical Candles" open={!collapsed.candles} onToggle={toggleSection}>
+        <div className="toolbar">
+          <label className="select-label">
+            Select Timeframe
+            <select value={timeframe} onChange={(e) => setTimeframe(e.target.value as (typeof TIMEFRAMES)[number])}>
+              {TIMEFRAMES.map((item) => (
+                <option key={item} value={item}>{item}</option>
+              ))}
+            </select>
+          </label>
+          <div className="toolbar">
+            {TIMEFRAMES.map((item) => (
+              <button key={item} onClick={() => setTimeframe(item)} aria-pressed={item === timeframe}>{item}</button>
+            ))}
+          </div>
         </div>
         {loadingHistory ? <p>Loading candles…</p> : null}
         {historyError ? <p className="bad">{historyError}</p> : null}
@@ -184,46 +229,69 @@ export function App() {
             </tbody>
           </table>
         </div>
-      </section>
+      </DropdownSection>
 
-      <section className="grid">
-        <article className="card">
-          <h2>Database</h2>
-          {diagnosticsBody ? (
-            <>
-              <Line label="Connected" value={flag(healthBody?.database.connected)} />
-              <Line label="Revision" value={diagnosticsBody.alembic_revision || "not reported"} />
-              <Line label="Products" value={String(diagnosticsBody.counts.products)} />
-              <Line label="Candles" value={String(diagnosticsBody.counts.candles)} />
-              <Line label="Latest write" value={diagnosticsBody.latest_received_at || "none"} />
-              <Line label="Unique candle slot" value={flag(diagnosticsBody.constraints.uq_candle_slot)} />
-              {Object.entries(diagnosticsBody.tables).map(([name, present]) => <Line key={name} label={name} value={present ? "present" : "missing"} />)}
-              {Object.entries(diagnosticsBody.counts.by_timeframe).map(([name, count]) => <Line key={name} label={name} value={String(count)} />)}
-            </>
-          ) : <p className="muted">{diagnostics?.error || "Diagnostics not loaded."}</p>}
-        </article>
-        <article className="card">
-          <h2>WebSocket</h2>
-          <Line label="Connected" value={socket ? (socket.connected ? "yes" : "no") : "not reported"} />
-          <Line label="Last message" value={socket?.last_message_at || "none"} />
-          <Line label="Last heartbeat" value={socket?.last_heartbeat_at || "none"} />
-          <Line label="Reconnects this process" value={socket && typeof socket.reconnect_count === "number" ? String(socket.reconnect_count) : "not reported"} />
-          <Line label="Recoveries succeeded" value={socket && typeof socket.recovery_succeeded === "number" ? String(socket.recovery_succeeded) : "not reported"} />
-          <Line label="Recoveries failed" value={socket && typeof socket.recovery_failed === "number" ? String(socket.recovery_failed) : "not reported"} />
-          <Line label="Last recovery" value={socket?.last_recovery_status || "not reported"} />
-          <Line label="Last recovery error" value={socket?.last_recovery_error || "none"} />
-          <Line label="System status" value={socket?.system_status || "not reported"} />
-          <Line label="Last socket error" value={socket?.last_error || "none"} />
-          <Line label="Recent missing candles" value={healthBody ? String(healthBody.recent_missing_candles) : "not reported"} />
-          <h2>Recent quality events</h2>
-          {(diagnosticsBody?.recent_quality_events ?? []).length === 0 ? <p className="muted">No quality events returned.</p> : (
-            <ul>{diagnosticsBody?.recent_quality_events.map((event, index) => <li key={`${event.occurred_at}-${index}`}>{event.occurred_at} {event.kind} {event.timeframe || ""} {qualitySummary(event.detail)}</li>)}</ul>
-          )}
-        </article>
-      </section>
+      <DropdownSection id="infrastructure" title="Database & WebSocket Diagnostics" open={!collapsed.infrastructure} onToggle={toggleSection}>
+        <div className="grid">
+          <article className="card">
+            <h2>Database</h2>
+            {diagnosticsBody ? (
+              <>
+                <Line label="Connected" value={flag(healthBody?.database.connected)} />
+                <Line label="Revision" value={diagnosticsBody.alembic_revision || "not reported"} />
+                <Line label="Products" value={String(diagnosticsBody.counts.products)} />
+                <Line label="Candles" value={String(diagnosticsBody.counts.candles)} />
+                <Line label="Latest write" value={diagnosticsBody.latest_received_at || "none"} />
+                <Line label="Unique candle slot" value={flag(diagnosticsBody.constraints.uq_candle_slot)} />
+                {Object.entries(diagnosticsBody.tables).map(([name, present]) => <Line key={name} label={name} value={present ? "present" : "missing"} />)}
+                {Object.entries(diagnosticsBody.counts.by_timeframe).map(([name, count]) => <Line key={name} label={name} value={String(count)} />)}
+              </>
+            ) : <p className="muted">{diagnostics?.error || "Diagnostics not loaded."}</p>}
+          </article>
+          <article className="card">
+            <h2>WebSocket</h2>
+            <Line label="Connected" value={socket ? (socket.connected ? "yes" : "no") : "not reported"} />
+            <Line label="Last message" value={socket?.last_message_at || "none"} />
+            <Line label="Last heartbeat" value={socket?.last_heartbeat_at || "none"} />
+            <Line label="Reconnects this process" value={socket && typeof socket.reconnect_count === "number" ? String(socket.reconnect_count) : "not reported"} />
+            <Line label="Recoveries succeeded" value={socket && typeof socket.recovery_succeeded === "number" ? String(socket.recovery_succeeded) : "not reported"} />
+            <Line label="Recoveries failed" value={socket && typeof socket.recovery_failed === "number" ? String(socket.recovery_failed) : "not reported"} />
+            <Line label="Last recovery" value={socket?.last_recovery_status || "not reported"} />
+            <Line label="Last recovery error" value={socket?.last_recovery_error || "none"} />
+            <Line label="System status" value={socket?.system_status || "not reported"} />
+            <Line label="Last socket error" value={socket?.last_error || "none"} />
+            <Line label="Recent missing candles" value={healthBody ? String(healthBody.recent_missing_candles) : "not reported"} />
+            <h2>Recent quality events</h2>
+            {(diagnosticsBody?.recent_quality_events ?? []).length === 0 ? <p className="muted">No quality events returned.</p> : (
+              <ul>{diagnosticsBody?.recent_quality_events.map((event, index) => <li key={`${event.occurred_at}-${index}`}>{event.occurred_at} {event.kind} {event.timeframe || ""} {qualitySummary(event.detail)}</li>)}</ul>
+            )}
+          </article>
+        </div>
+      </DropdownSection>
 
-      <section className="card">
-        <h2>API tests</h2>
+      <DropdownSection id="verdict" title="Analysis Verdict Engine" open={!collapsed.verdict} onToggle={toggleSection}>
+        <p className="muted">Calls GET /analysis/verdict. Probabilities are estimated from closed candles and are not guarantees.</p>
+        <div className="toolbar">
+          <label className="select-label">
+            Focus timeframe
+            <select value={verdictTimeframe} onChange={(e) => setVerdictTimeframe(e.target.value)} disabled={verdictBusy}>
+              {["1m", "5m", "15m", "1h", "4h", "1d"].map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </label>
+          <label className="select-label">
+            Horizon
+            <select value={verdictHorizon} onChange={(e) => setVerdictHorizon(e.target.value)} disabled={verdictBusy}>
+              {["15m", "30m", "1h", "4h", "24h"].map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </label>
+          <button type="button" onClick={() => void runVerdict(false)} disabled={verdictBusy}>{verdictBusy ? "Analyzing…" : "Analyze"}</button>
+          <button type="button" onClick={() => void runVerdict(true)} disabled={verdictBusy}>Recompute</button>
+        </div>
+        {verdict ? <VerdictSummary result={verdict} /> : <p className="muted">Press Analyze to run the layered engine.</p>}
+        {verdict ? <ResultView result={verdict} /> : null}
+      </DropdownSection>
+
+      <DropdownSection id="apitests" title="API Endpoint Tests" open={!collapsed.apitests} onToggle={toggleSection}>
         <div className="toolbar">
           {TESTS.map(([label, path]) => (
             <button key={path} onClick={() => void callApi(path).then((result) => setManual((current) => ({ ...current, [path]: result })))}>Test {label}</button>
@@ -232,8 +300,24 @@ export function App() {
         </div>
         {Object.values(manual).map((result) => <ResultView key={result.path} result={result} />)}
         {delta ? <ResultView result={delta} /> : null}
-      </section>
+      </DropdownSection>
     </main>
+  );
+}
+
+function DropdownSection({ id, title, open, onToggle, children }: { id: string; title: string; open: boolean; onToggle: (id: string) => void; children: ReactNode }) {
+  return (
+    <section className={`dropdown-section ${open ? "is-open" : "is-closed"}`}>
+      <button type="button" className="dropdown-trigger" aria-expanded={open} onClick={() => onToggle(id)}>
+        <h2>{title}</h2>
+        <span className="dropdown-chevron" aria-hidden="true">▾</span>
+      </button>
+      <div className="dropdown-panel" aria-hidden={!open}>
+        <div className="dropdown-inner">
+          {children}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -264,6 +348,62 @@ function Ohlc({ candle }: { candle: Candle }) {
       <Line label="Volume" value={candle.volume} />
       <Line label="Timeframe" value={candle.timeframe} />
     </>
+  );
+}
+
+type VerdictBody = {
+  verdict?: { verdict?: string; reasons?: string[]; risks?: string[]; what_changes_this_view?: string[] };
+  probabilities?: { p_bull?: number; p_bear?: number; p_range?: number };
+  confidence?: number;
+  regime?: string;
+  market_read?: { sentence?: string };
+  sequence?: { stage?: string | null; direction?: string };
+  trade_plan?: { status?: string; direction?: string; entry?: number; invalidation?: number; risk_reward_first_target?: number | null; expected_value_r?: number | null };
+  layer_summaries?: { name: string; status: string; summary: string }[];
+  elapsed_ms?: number;
+  cached?: boolean;
+  run_id?: number | null;
+  disclaimer?: string;
+};
+
+export function VerdictSummary({ result }: { result: ApiResult }) {
+  if (!result.ok) return <p className="bad">{result.error ?? "The verdict request failed."}{result.body && typeof result.body === "object" && "detail" in (result.body as object) ? ` — ${String((result.body as { detail?: unknown }).detail)}` : ""}</p>;
+  const body = (result.body ?? {}) as VerdictBody;
+  const code = body.verdict?.verdict ?? "UNKNOWN";
+  const pct = (value: number | undefined | null) => (typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(0)}%` : "—");
+  const plan = body.trade_plan ?? {};
+  return (
+    <div className="grid verdict-grid">
+      <article className="card">
+        <h2>Verdict</h2>
+        <div className="row"><strong className="verdict-code">{code.replace(/_/g, " ")}</strong><span className={`badge ${code === "ENTER_NOW" || code === "HOLD" ? "ok" : code === "AVOID_HIGH_RISK" || code === "CONSIDER_EXIT" ? "bad" : "warn"}`}>{pct(body.confidence)} confidence</span></div>
+        <p className="muted">{body.market_read?.sentence ?? ""}</p>
+        <Line label="Bullish" value={pct(body.probabilities?.p_bull)} />
+        <Line label="Bearish" value={pct(body.probabilities?.p_bear)} />
+        <Line label="Range" value={pct(body.probabilities?.p_range)} />
+        <Line label="Regime" value={(body.regime ?? "—").replace(/_/g, " ")} />
+        <Line label="Playbook stage" value={body.sequence?.stage ? `${body.sequence.stage} (${body.sequence.direction ?? ""})` : "not armed"} />
+        <Line label="Run" value={`${body.run_id ?? "—"}${body.cached ? " · cached" : ""} · ${body.elapsed_ms ?? "—"} ms`} />
+      </article>
+      <article className="card">
+        <h2>Reasons and risks</h2>
+        <ul>{(body.verdict?.reasons ?? []).map((item, index) => <li key={`r${index}`}>{item}</li>)}</ul>
+        {(body.verdict?.risks ?? []).length ? <><h2>Risks</h2><ul>{body.verdict?.risks?.map((item, index) => <li key={`k${index}`}>{item}</li>)}</ul></> : null}
+        {(body.verdict?.what_changes_this_view ?? []).length ? <><h2>What changes this view</h2><ul>{body.verdict?.what_changes_this_view?.map((item, index) => <li key={`c${index}`}>{item}</li>)}</ul></> : null}
+      </article>
+      <article className="card">
+        <h2>Trade plan</h2>
+        <Line label="Status" value={plan.status ?? "—"} />
+        <Line label="Direction" value={plan.direction ?? "—"} />
+        <Line label="Entry" value={plan.entry !== undefined ? String(plan.entry) : "—"} />
+        <Line label="Invalidation" value={plan.invalidation !== undefined ? String(plan.invalidation) : "—"} />
+        <Line label="R:R to T1" value={plan.risk_reward_first_target != null ? String(plan.risk_reward_first_target) : "—"} />
+        <Line label="EV (R)" value={plan.expected_value_r != null ? String(plan.expected_value_r) : "—"} />
+        <h2>Layers</h2>
+        {(body.layer_summaries ?? []).map((layer) => <Line key={layer.name} label={layer.name} value={`${layer.status} · ${layer.summary}`} />)}
+        <p className="muted">{body.disclaimer ?? ""}</p>
+      </article>
+    </div>
   );
 }
 

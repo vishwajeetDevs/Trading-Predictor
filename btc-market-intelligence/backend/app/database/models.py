@@ -225,6 +225,29 @@ class DerivativesQualityEvent(Base):
     detail: Mapped[dict] = mapped_column(JSON, nullable=False)
 
 
+class VerdictRun(Base):
+    """One stored output of the layered verdict engine; `outcome` is filled by later calibration."""
+
+    __tablename__ = "verdict_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), index=True)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    engine_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    focus_timeframe: Mapped[str] = mapped_column(String(8), nullable=False)
+    horizon: Mapped[str] = mapped_column(String(8), nullable=False)
+    regime: Mapped[str | None] = mapped_column(String(32))
+    close: Mapped[float | None] = mapped_column(Numeric(38, 12))
+    p_bull: Mapped[float | None] = mapped_column(Numeric(18, 8))
+    p_bear: Mapped[float | None] = mapped_column(Numeric(18, 8))
+    p_range: Mapped[float | None] = mapped_column(Numeric(18, 8))
+    confidence: Mapped[float | None] = mapped_column(Numeric(18, 8))
+    verdict: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    outcome: Mapped[dict | None] = mapped_column(JSON)
+
+
 class DataQualityEvent(Base):
     __tablename__ = "data_quality_events"
 

@@ -24,7 +24,7 @@ export function CandleChart({ candles }: { candles: Candle[] }) {
       {numeric.map((candle, index) => {
         const x = pad + index * slot + slot / 2;
         const up = candle.close >= candle.open;
-        const color = up ? "#3ddc97" : "#ff6b6b";
+        const color = up ? "#f5f5f5" : "#666666";
         const bodyTop = y(Math.max(candle.open, candle.close));
         const bodyHeight = Math.max(1, Math.abs(y(candle.open) - y(candle.close)));
         return (

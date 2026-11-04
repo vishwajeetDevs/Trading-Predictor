@@ -1,9 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { defaultSettings, loadBundle, loadSettings, saveSettings, type Settings } from "./api";
+import { defaultSettings, loadBundle, loadSettings, requestVerdict, saveSettings, verdictRequestFrom, type OpenPosition, type Settings } from "./api";
 import { CandleChart, candleRows, historyPoints, LineChart } from "./charts";
 import { HORIZONS, INDICATOR_HELP, TIMEFRAMES, percent, text, tone } from "./format";
+import { VerdictControls, VerdictView } from "./Verdict";
 
 type Bundle = Awaited<ReturnType<typeof loadBundle>>;
+type VerdictState = { body: Record<string, unknown> | null; error: string | null; busy: boolean; at: string | null };
 
 export function App() {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
@@ -14,6 +16,17 @@ export function App() {
   const [horizon, setHorizon] = useState("1h");
   const [ready, setReady] = useState(false);
   const [tick, setTick] = useState(0);
+  const [verdict, setVerdict] = useState<VerdictState>({ body: null, error: null, busy: false, at: null });
+
+  const analyze = async (force = false) => {
+    setVerdict((state) => ({ ...state, busy: true, error: null }));
+    try {
+      const body = await requestVerdict(settings.baseUrl, verdictRequestFrom(settings, force));
+      setVerdict({ body, error: null, busy: false, at: new Date().toISOString() });
+    } catch (reason) {
+      setVerdict((state) => ({ ...state, busy: false, error: reason instanceof Error ? reason.message : "Analysis failed." }));
+    }
+  };
 
   useEffect(() => {
     loadSettings().then((stored) => {
@@ -71,8 +84,44 @@ export function App() {
       <p className="muted">Last refresh {updated ?? "not yet"} · backend {settings.baseUrl}</p>
       {error ? <div className="error">{error} The last successful view stays on screen when one exists. <button type="button" onClick={() => setTick((value) => value + 1)}>Retry</button></div> : null}
       {loading && !bundle ? <div className="skeleton" /> : null}
+      {ready ? (
+        <Section title="Analysis verdict" id="verdict" settings={settings} update={update}>
+          <VerdictPanel settings={settings} update={update} state={verdict} onAnalyze={analyze} />
+        </Section>
+      ) : null}
       {bundle ? <Dashboard bundle={bundle} settings={settings} horizon={horizon} setHorizon={setHorizon} update={update} /> : null}
     </main>
+  );
+}
+
+function VerdictPanel({ settings, update, state, onAnalyze }: {
+  settings: Settings;
+  update: (patch: Partial<Settings>) => void;
+  state: VerdictState;
+  onAnalyze: (force?: boolean) => void;
+}) {
+  return (
+    <>
+      <p className="muted">Layered analysis: regime → liquidity → structure → SMC/ICT → levels → momentum → derivatives → fusion → risk → verdict. Probabilities, not guarantees.</p>
+      <VerdictControls
+        timeframe={settings.verdictTimeframe}
+        horizon={settings.verdictHorizon}
+        busy={state.busy}
+        onTimeframe={(verdictTimeframe) => update({ verdictTimeframe })}
+        onHorizon={(verdictHorizon) => update({ verdictHorizon })}
+        onAnalyze={() => onAnalyze(false)}
+      />
+      {state.error ? <div className="error">{state.error} <button type="button" onClick={() => onAnalyze(false)}>Retry</button></div> : null}
+      {state.busy && !state.body ? <div className="skeleton" /> : null}
+      {state.body ? (
+        <>
+          <p className="muted">Analyzed {state.at ?? ""} {settings.position ? `· open ${settings.position.side} from ${settings.position.entryPrice}` : "· no open position"} {settings.accountSize ? `· account ${settings.accountSize}` : ""}
+            {" "}<button type="button" className="link" onClick={() => onAnalyze(true)} disabled={state.busy}>Recompute</button>
+          </p>
+          <VerdictView body={state.body} />
+        </>
+      ) : !state.busy && !state.error ? <p className="muted">Press Analyze to run the layered engine on the latest closed candles.</p> : null}
+    </>
   );
 }
 
@@ -126,13 +175,26 @@ function Dashboard({ bundle, settings, horizon, setHorizon, update }: {
 
 function Section({ title, id, settings, update, children }: { title: string; id: string; settings: Settings; update: (patch: Partial<Settings>) => void; children: ReactNode }) {
   const open = !settings.collapsed[id];
+  const toggle = () => update({ collapsed: { ...settings.collapsed, [id]: open } });
   return (
-    <section className="section">
-      <div className="row">
+    <section className={`section dropdown ${open ? "is-open" : "is-closed"}`}>
+      <button
+        type="button"
+        className="dropdown-trigger"
+        aria-expanded={open}
+        aria-controls={`section-body-${id}`}
+        onClick={toggle}
+      >
         <h2>{title}</h2>
-        <button type="button" onClick={() => update({ collapsed: { ...settings.collapsed, [id]: open } })}>{open ? "Collapse" : "Expand"}</button>
+        <span className="dropdown-meta">
+          <span className="dropdown-chevron" aria-hidden="true">▾</span>
+        </span>
+      </button>
+      <div id={`section-body-${id}`} className="dropdown-panel" aria-hidden={!open}>
+        <div className="dropdown-inner">
+          {children}
+        </div>
       </div>
-      {open ? children : null}
     </section>
   );
 }
@@ -321,6 +383,11 @@ function Health({ health, diagnostics, snapshot, derivatives }: { health: Record
 function SettingsForm({ settings, update }: { settings: Settings; update: (patch: Partial<Settings>) => void }) {
   const [base, setBase] = useState(settings.baseUrl);
   const [message, setMessage] = useState("");
+  const position: OpenPosition = settings.position ?? { side: "long", entryPrice: 0, size: null };
+  const setPosition = (patch: Partial<OpenPosition>) => {
+    const next = { ...position, ...patch };
+    update({ position: next.entryPrice > 0 ? next : null });
+  };
   return (
     <div className="settings">
       <label>Backend URL
@@ -329,6 +396,31 @@ function SettingsForm({ settings, update }: { settings: Settings; update: (patch
       <label>Refresh seconds
         <input type="number" min={10} value={settings.refreshSeconds} onChange={(event) => update({ refreshSeconds: Number(event.target.value) })} />
       </label>
+      <h2>Risk inputs for the verdict</h2>
+      <div className="grid">
+        <label>Account size (quote currency)
+          <input type="number" min={0} step="any" value={settings.accountSize ?? ""} placeholder="optional" onChange={(event) => update({ accountSize: Number(event.target.value) > 0 ? Number(event.target.value) : null })} />
+        </label>
+        <label>Risk per trade %
+          <input type="number" min={0.1} max={10} step={0.1} value={settings.riskPercent} onChange={(event) => update({ riskPercent: Number(event.target.value) > 0 ? Number(event.target.value) : 1 })} />
+        </label>
+      </div>
+      <h2>Open position (optional)</h2>
+      <div className="grid">
+        <label>Side
+          <select value={position.side} onChange={(event) => setPosition({ side: event.target.value === "short" ? "short" : "long" })}>
+            <option value="long">long</option>
+            <option value="short">short</option>
+          </select>
+        </label>
+        <label>Entry price
+          <input type="number" min={0} step="any" value={position.entryPrice || ""} placeholder="none" onChange={(event) => setPosition({ entryPrice: Number(event.target.value) || 0 })} />
+        </label>
+        <label>Size
+          <input type="number" min={0} step="any" value={position.size ?? ""} placeholder="optional" onChange={(event) => setPosition({ size: Number(event.target.value) > 0 ? Number(event.target.value) : null })} />
+        </label>
+      </div>
+      {settings.position ? <button type="button" onClick={() => update({ position: null })}>Clear position</button> : null}
       <div className="row">
         <button type="button" onClick={() => {
           try {
@@ -347,9 +439,9 @@ function SettingsForm({ settings, update }: { settings: Settings; update: (patch
 
 function Field({ label, value, help }: { label: string; value: string; help?: string }) {
   return (
-    <div>
-      <div className="muted">{help ? <span className="help" title={help}>{label}</span> : label}</div>
-      <div className={tone(value)}>{value}</div>
+    <div className="field-box">
+      <div className="field-label muted">{help ? <span className="help" title={help}>{label}</span> : label}</div>
+      <div className={`field-value ${tone(value)}`}>{value}</div>
     </div>
   );
 }

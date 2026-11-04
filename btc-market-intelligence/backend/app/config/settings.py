@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     funding_lookback_days: int = 30
     mark_divergence_percent: str = "0.001"
     book_imbalance_threshold: str = "0.2"
+    enable_verdict: bool = True
+    verdict_cache_seconds: int = 30
+    default_account_size: float | None = None
+    default_risk_percent: float = 1.0
     candle_chunk_size: int = 1500
     max_candle_page: int = 2000
     stale_after_seconds: int = 180

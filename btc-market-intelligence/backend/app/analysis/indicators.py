@@ -173,6 +173,207 @@ def realized_volatility(closes: list[float], window: int = RV_WINDOW) -> float |
     return math.sqrt(variance)
 
 
+# ---------------------------------------------------------------------------
+# Verdict-engine indicators. These are additive. They are not part of the frozen
+# study definition and do not change `definitions.parameters()` or its hash.
+# ---------------------------------------------------------------------------
+
+
+def _wilder_series(values: list[float], period: int) -> list[float | None]:
+    out: list[float | None] = [None] * len(values)
+    if period <= 0 or len(values) < period:
+        return out
+    current = sum(values[:period]) / period
+    out[period - 1] = current
+    for index in range(period, len(values)):
+        current = (current * (period - 1) + values[index]) / period
+        out[index] = current
+    return out
+
+
+def directional_movement(bars: list[Bar], period: int = 14) -> dict | None:
+    """Wilder ADX with +DI and -DI. Needs 2 * period bars."""
+    if period <= 0 or len(bars) < period * 2 + 1:
+        return None
+    plus_dm: list[float] = []
+    minus_dm: list[float] = []
+    ranges = true_ranges(bars)[1:]
+    for index in range(1, len(bars)):
+        up = bars[index].high - bars[index - 1].high
+        down = bars[index - 1].low - bars[index].low
+        plus_dm.append(up if up > down and up > 0 else 0.0)
+        minus_dm.append(down if down > up and down > 0 else 0.0)
+    smooth_tr = _wilder_series(ranges, period)
+    smooth_plus = _wilder_series(plus_dm, period)
+    smooth_minus = _wilder_series(minus_dm, period)
+    plus_di: list[float] = []
+    minus_di: list[float] = []
+    dx: list[float] = []
+    for tr, plus, minus in zip(smooth_tr, smooth_plus, smooth_minus):
+        if tr is None or plus is None or minus is None or tr <= 0:
+            continue
+        p = plus / tr * 100.0
+        m = minus / tr * 100.0
+        plus_di.append(p)
+        minus_di.append(m)
+        total = p + m
+        dx.append(0.0 if total == 0 else abs(p - m) / total * 100.0)
+    adx_series = _wilder_series(dx, period)
+    adx_value = adx_series[-1] if adx_series else None
+    if adx_value is None or not plus_di:
+        return None
+    previous_adx = adx_series[-2] if len(adx_series) > 1 else None
+    return {
+        "adx": adx_value,
+        "plus_di": plus_di[-1],
+        "minus_di": minus_di[-1],
+        "adx_slope": None if previous_adx is None else adx_value - previous_adx,
+    }
+
+
+def stochastic(bars: list[Bar], period: int = 14, smooth_k: int = 3, smooth_d: int = 3) -> dict | None:
+    """Slow stochastic. %K is the SMA of raw %K, %D is the SMA of %K."""
+    needed = period + smooth_k + smooth_d - 2
+    if period <= 0 or len(bars) < needed:
+        return None
+    raw: list[float] = []
+    for index in range(period - 1, len(bars)):
+        window = bars[index - period + 1 : index + 1]
+        high = max(bar.high for bar in window)
+        low = min(bar.low for bar in window)
+        span = high - low
+        raw.append(50.0 if span <= 0 else (bars[index].close - low) / span * 100.0)
+    k_values = [sum(raw[i - smooth_k + 1 : i + 1]) / smooth_k for i in range(smooth_k - 1, len(raw))]
+    if len(k_values) < smooth_d:
+        return None
+    d_values = [sum(k_values[i - smooth_d + 1 : i + 1]) / smooth_d for i in range(smooth_d - 1, len(k_values))]
+    return {"k": k_values[-1], "d": d_values[-1]}
+
+
+def rate_of_change(closes: list[float], period: int = 12) -> float | None:
+    if period <= 0 or len(closes) < period + 1 or closes[-period - 1] <= 0:
+        return None
+    return (closes[-1] / closes[-period - 1] - 1.0) * 100.0
+
+
+def cci(bars: list[Bar], period: int = 20) -> float | None:
+    if period <= 1 or len(bars) < period:
+        return None
+    typical = [(bar.high + bar.low + bar.close) / 3.0 for bar in bars[-period:]]
+    mean = sum(typical) / period
+    deviation = sum(abs(value - mean) for value in typical) / period
+    if deviation == 0:
+        return 0.0
+    return (typical[-1] - mean) / (0.015 * deviation)
+
+
+def obv_series(bars: list[Bar]) -> list[float]:
+    out: list[float] = []
+    total = 0.0
+    for index, bar in enumerate(bars):
+        if index > 0:
+            previous = bars[index - 1].close
+            if bar.close > previous:
+                total += bar.volume
+            elif bar.close < previous:
+                total -= bar.volume
+        out.append(total)
+    return out
+
+
+def obv_slope(bars: list[Bar], window: int = 20) -> float | None:
+    """Least-squares slope of OBV over the last `window` bars, normalized by mean volume."""
+    if window < 3 or len(bars) < window:
+        return None
+    series = obv_series(bars)[-window:]
+    mean_volume = sum(bar.volume for bar in bars[-window:]) / window
+    if mean_volume <= 0:
+        return None
+    slope = linear_slope(series)
+    return None if slope is None else slope / mean_volume
+
+
+def linear_slope(values: list[float]) -> float | None:
+    count = len(values)
+    if count < 2:
+        return None
+    mean_x = (count - 1) / 2.0
+    mean_y = sum(values) / count
+    numerator = sum((index - mean_x) * (value - mean_y) for index, value in enumerate(values))
+    denominator = sum((index - mean_x) ** 2 for index in range(count))
+    if denominator == 0:
+        return None
+    return numerator / denominator
+
+
+def keltner(bars: list[Bar], period: int = 20, mult: float = 1.5, atr_period: int = ATR_PERIOD) -> dict | None:
+    closes = [bar.close for bar in bars]
+    middle = ema(closes, period)
+    width = atr(bars, atr_period)
+    if middle is None or width is None:
+        return None
+    return {"middle": middle, "upper": middle + mult * width, "lower": middle - mult * width}
+
+
+def bollinger_width_series(closes: list[float], period: int = BB_PERIOD, mult: float = BB_MULT) -> list[float | None]:
+    out: list[float | None] = [None] * len(closes)
+    for index in range(period - 1, len(closes)):
+        bands = bollinger(closes[: index + 1], period, mult)
+        if bands is None or bands["middle"] <= 0:
+            continue
+        out[index] = (bands["upper"] - bands["lower"]) / bands["middle"] * 100.0
+    return out
+
+
+def volume_zscore(bars: list[Bar], window: int = 20) -> float | None:
+    """Z-score of the latest volume against the prior `window` volumes."""
+    if window < 3 or len(bars) < window + 1:
+        return None
+    history = [bar.volume for bar in bars[-window - 1 : -1]]
+    mean = sum(history) / window
+    variance = sum((value - mean) ** 2 for value in history) / (window - 1)
+    sigma = math.sqrt(variance)
+    if sigma <= 0:
+        return None
+    return (bars[-1].volume - mean) / sigma
+
+
+def efficiency_ratio(closes: list[float], period: int = 10) -> float | None:
+    """Kaufman efficiency ratio: net change over the sum of absolute changes."""
+    if period <= 0 or len(closes) < period + 1:
+        return None
+    window = closes[-period - 1 :]
+    path = sum(abs(window[i] - window[i - 1]) for i in range(1, len(window)))
+    if path == 0:
+        return 0.0
+    return abs(window[-1] - window[0]) / path
+
+
+def hurst_variance_ratio(closes: list[float], lag: int = 8, window: int = 128) -> float | None:
+    """Hurst estimate from the variance ratio of `lag`-step and 1-step log returns.
+
+    H = 0.5 is a random walk; above favours persistence, below favours mean reversion.
+    """
+    if lag < 2 or len(closes) < window + lag or window < lag * 4:
+        return None
+    sample = closes[-window - lag :]
+    if any(value <= 0 for value in sample):
+        return None
+    logs = [math.log(value) for value in sample]
+    short = [logs[i] - logs[i - 1] for i in range(1, len(logs))]
+    long = [logs[i] - logs[i - lag] for i in range(lag, len(logs))]
+
+    def _variance(values: list[float]) -> float:
+        mean = sum(values) / len(values)
+        return sum((item - mean) ** 2 for item in values) / (len(values) - 1)
+
+    short_var = _variance(short)
+    long_var = _variance(long)
+    if short_var <= 0 or long_var <= 0:
+        return None
+    return 0.5 * math.log(long_var / short_var) / math.log(lag)
+
+
 def latest_indicators(bars: list[Bar]) -> dict:
     closes = [bar.close for bar in bars]
     atr_value = atr(bars)
