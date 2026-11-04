@@ -1,0 +1,70 @@
+{
+  "heartbeat": {
+    "ts_origin": 1793747292296162,
+    "ts_publish": 1793747292296162,
+    "type": "heartbeat"
+  },
+  "subscriptions": {
+    "channels": [
+      {"name": "candlestick_1m", "symbols": ["BTCUSD"]},
+      {"name": "ticker", "symbols": ["BTCUSD"]},
+      {"name": "mark_price", "symbols": ["MARK:BTCUSD"]},
+      {"name": "system_status"}
+    ],
+    "type": "subscriptions"
+  },
+  "system_status": {
+    "event": "snapshot",
+    "maintenance_announcement_time": "",
+    "maintenance_finish_time": "",
+    "maintenance_start_time": "",
+    "status": "live",
+    "timestamp": 1793737551660041,
+    "type": "system_status"
+  },
+  "mark_price": {
+    "p": "77795.96942679",
+    "sy": "MARK:BTCUSD",
+    "ts": 1793747293884800,
+    "type": "mark_price"
+  },
+  "ticker": {
+    "d": [
+      {
+        "g": [null, null, null, null, null],
+        "i": 27,
+        "m": "77794.86977071",
+        "ohlc": [76760.5, 78039.5, 76351.5, 77789.5],
+        "s": "BTCUSD"
+      }
+    ],
+    "sp": "77816.5",
+    "sy": "BTCUSD",
+    "ts": 1793747293176424,
+    "type": "ticker"
+  },
+  "candlestick_1m": {
+    "c": 77802.0,
+    "cst": 1793747280000000,
+    "h": 77802.0,
+    "l": 77789.5,
+    "o": 77790.0,
+    "res": "1m",
+    "sy": "BTCUSD",
+    "ts": 1793747295994687,
+    "type": "candlestick_1m",
+    "v": 5.0
+  },
+  "candlestick_1m_update": {
+    "c": 77810.5,
+    "cst": 1793747280000000,
+    "h": 77810.5,
+    "l": 77789.5,
+    "o": 77790.0,
+    "res": "1m",
+    "sy": "BTCUSD",
+    "ts": 1793747296602474,
+    "type": "candlestick_1m",
+    "v": 85.0
+  }
+}

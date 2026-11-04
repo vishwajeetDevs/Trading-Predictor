@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "BTC Market Intelligence",
+  "version": "0.1.0",
+  "description": "Read-only BTC market intelligence. No orders, account access, or trade instructions.",
+  "permissions": ["sidePanel", "storage"],
+  "host_permissions": ["http://127.0.0.1:8000/*", "http://localhost:8000/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Open BTC Market Intelligence"
+  },
+  "side_panel": {
+    "default_path": "index.html"
+  }
+}

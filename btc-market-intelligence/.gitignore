@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.log
+*.sqlite
+*.sqlite3
+.idea/
+.vscode/
+verification-dashboard/node_modules/
+verification-dashboard/dist/
